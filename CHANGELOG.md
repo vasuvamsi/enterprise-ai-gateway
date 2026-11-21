@@ -5,6 +5,32 @@ All notable changes to the **Enterprise AI Gateway** project will be documented 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-21
+
+### Added
+- **Multi-Container Docker Orchestration (`docker-compose.yml`)**:
+  - Full microservices stack with three containerized services:
+    1. `redis` (`redis:7-alpine`): Distributed caching backend with automated health check probe (`redis-cli ping`).
+    2. `litellm` (`ghcr.io/berriai/litellm:main-stable`): High-availability AI routing proxy on port `4000`, connected to Redis for shared response caching.
+    3. `ai-gateway-app`: Gateway application container built from local `Dockerfile`, exposing port `8000`.
+  - Configured service health check dependencies: LiteLLM waits for healthy Redis; AI Gateway waits for LiteLLM.
+- **Production Multi-Stage Dockerfile (`Dockerfile`)**:
+  - Optimized multi-stage build using `python:3.12-slim` base image.
+  - UV binary extraction via `ghcr.io/astral-sh/uv:latest` for fast locked dependency resolution (`uv sync --locked --no-install-project --no-dev`).
+  - Lean final runtime stage containing only the virtual environment and application code.
+- **Distributed Redis Response Caching (`litellm_config.yaml`)**:
+  - Migrated from in-process local memory cache to distributed Redis cache with configurable TTL (`ttl: 3600`).
+  - Added environment variable routing for `REDIS_HOST` and `REDIS_PORT`.
+- **Dynamic Gateway Environment Configuration (`app/graph.py`)**:
+  - Made LiteLLM proxy base URL dynamic via `os.getenv("LITELLM_BASE_URL", "http://localhost:4000/v1")` enabling seamless operation both locally and in Docker networks (`http://litellm:4000/v1`).
+  - Dynamic master key injection via `os.getenv("LITELLM_MASTER_KEY", ...)`.
+
+### Fixed
+- Fixed missing `import os` in `app/graph.py` required for environment variable lookups.
+- Resolved conflicting cache type configuration in `litellm_config.yaml` to ensure Redis distributed caching is active.
+
+---
+
 ## [0.3.0] - 2026-11-21
 
 ### Added
@@ -31,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configured `enterprise-chat` as primary model backed by `groq/qwen/qwen3.8-27b`.
   - Configured `enterprise-chat-fallback` as secondary model backed by `gemini/gemini-2.5-flash`.
   - Automated fallback routing policy with `num_retries: 2` on rate limits, network timeouts, or upstream outages.
-  - In-memory local response caching (`cache: true`, `type: local`) to eliminate redundant LLM calls and cut API costs.
+  - In-memory local response caching to eliminate redundant LLM calls and cut API costs.
 - **LangChain OpenAI Interface (`app/graph.py`)**:
   - Integrated `langchain-openai` (`ChatOpenAI`) connecting LangGraph to the local LiteLLM Proxy endpoint (`http://localhost:4000/v1`).
 - **Dependencies**:

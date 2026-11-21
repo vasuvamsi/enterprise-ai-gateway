@@ -1,8 +1,8 @@
 # Enterprise AI Gateway
 
-A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, and **LiteLLM Proxy Router** with multi-model failover (**Groq Qwen 3.8 27B** $\rightarrow$ **Google Gemini 2.5 Flash**), **Local Caching**, **Real-Time Guardrails (PII & Injection Filtering)**, **Automated Pytest Testing**, **GitHub Actions CI/CD**, and **Prometheus Observability**.
+A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, **LiteLLM Proxy Router**, and **Redis Distributed Caching**. Fully containerized with **Docker & Docker Compose**, featuring automated **Pytest** test suites, **GitHub Actions CI/CD**, and **Prometheus Observability**.
 
-The Gateway acts as an enterprise control plane positioned between your client applications and upstream Large Language Models (LLMs). It enforces **real-time security guardrails**, **automated PII redaction**, **prompt injection defense**, **automatic model fallback**, and provides out-of-the-box **Prometheus observability**.
+The Gateway acts as an enterprise control plane positioned between your client applications and upstream Large Language Models (LLMs). It enforces **real-time security guardrails**, **automated PII redaction**, **prompt injection defense**, **multi-model failover** (**Groq Qwen 3.8 27B** $\rightarrow$ **Google Gemini 2.5 Flash**), and **Redis response caching**.
 
 ---
 
@@ -10,8 +10,8 @@ The Gateway acts as an enterprise control plane positioned between your client a
 
 ```mermaid
 flowchart TD
-    Client(["Client Application"]) -->|POST /chat| API["FastAPI Gateway (/chat)"]
-    API -->|ainvoke| Graph["LangGraph StateGraph"]
+    Client(["Client Application"]) -->|POST :8000/chat| Gateway["ai-gateway-app (FastAPI Gateway)"]
+    Gateway -->|ainvoke| Graph["LangGraph StateGraph"]
 
     subgraph StateMachine ["LangGraph Agent Workflow"]
         Start([START]) --> GuardNode["input_guard_node"]
@@ -23,67 +23,67 @@ flowchart TD
         LLMNode --> EndNode
     end
 
-    subgraph ProxyLayer ["LiteLLM Proxy & Router (:4000)"]
-        LLMNode -->|http://localhost:4000/v1| Router["LiteLLM Router & Local Cache"]
-        Router --> Cache{In Local Cache?}
-        Cache -->|Hit| CachedResp["Instant Response (0 ms)"]
-        Cache -->|Miss| Primary["Primary: Groq (qwen/qwen3.8-27b)"]
-        Primary -.->|Rate Limit / 5xx / Timeout| Fallback["Fallback: Gemini (gemini-2.5-flash)"]
+    subgraph DockerCompose ["Docker Compose Stack"]
+        Gateway -->|http://litellm:4000/v1| LiteLLM["litellm (LiteLLM Proxy Container :4000)"]
+        LiteLLM -->|Cache Check & Store| Redis[("redis:7-alpine (:6379)<br/>TTL: 3600s")]
     end
 
-    Graph --> API
-    API --> Client
-    Prometheus["Prometheus / Grafana"] -.->|Scrapes GET /metrics| API
+    subgraph UpstreamProviders ["Upstream LLM Providers"]
+        LiteLLM -->|Primary| Groq["Groq LPU (qwen/qwen3.8-27b)"]
+        Groq -.->|Fallback on 429 / Outage| Gemini["Google AI Studio (gemini-2.5-flash)"]
+    end
+
+    Graph --> Gateway
+    Gateway --> Client
+    Prometheus["Prometheus / Grafana"] -.->|Scrapes GET :8000/metrics| Gateway
 ```
 
 ---
 
 ## Features Implemented
 
-### 1. Multi-Model Routing, Failover & Caching (`litellm_config.yaml`)
-- **Centralized LiteLLM Router**:
-  - Routes requests through a high-performance proxy on `http://localhost:4000/v1`.
-  - Standardized OpenAI-compatible interface used by LangChain (`ChatOpenAI`).
-- **Primary & Fallback Models**:
-  - **Primary**: `enterprise-chat` $\rightarrow$ `groq/qwen/qwen3.8-27b` via Groq LPU for low latency.
-  - **Fallback**: `enterprise-chat-fallback` $\rightarrow$ `gemini/gemini-2.5-flash` via Google AI Studio.
-  - **Automatic Failover**: Automatically retries and falls back (`fallbacks: [{"enterprise-chat": ["enterprise-chat-fallback"]}]`, `num_retries: 2`) when rate limits (HTTP 429) or upstream outages occur.
-- **In-Memory Response Caching**:
-  - `litellm_settings.cache: true` with `type: local`.
-  - Repeated identical queries return instantly from memory with zero token consumption and near-zero latency.
+### 1. Multi-Container Docker Stack (`docker-compose.yml` & `Dockerfile`)
+- **One-Command Orchestration**: Boots the entire enterprise gateway microservices architecture via `docker compose up --build -d`.
+- **Three Orchestrated Services**:
+  - `redis`: Redis 7 Alpine image with native container health checks (`redis-cli ping`).
+  - `litellm`: Multi-model routing proxy attached to Redis for distributed caching.
+  - `ai-gateway-app`: FastAPI + LangGraph gateway built using an optimized multi-stage `Dockerfile` with UV binary caching.
+- **Service Dependency & Health Guarantees**: `litellm` starts only after Redis passes health checks; `ai-gateway-app` depends directly on `litellm`.
 
-### 2. Multi-Layer Security Guardrails (`app/guardrails.py`)
+### 2. Multi-Model Routing, Failover & Redis Caching (`litellm_config.yaml`)
+- **Centralized Proxy on Port `4000`**: Exposes OpenAI-compatible endpoints to LangGraph.
+- **Model Fallback Chain**:
+  - **Primary**: `enterprise-chat` $\rightarrow$ `groq/qwen/qwen3.8-27b` via Groq LPU.
+  - **Fallback**: `enterprise-chat-fallback` $\rightarrow$ `gemini/gemini-2.5-flash` via Google AI Studio.
+  - **Automatic Failover**: Automatically retries (`num_retries: 2`) and shifts traffic to Gemini during upstream timeouts or rate limits (HTTP 429).
+- **Distributed Redis Cache**:
+  - Stores completions with a 1-hour TTL (`ttl: 3600`).
+  - Delivers sub-10ms response times for repeated queries and eliminates duplicate upstream token charges.
+
+### 3. Multi-Layer Security Guardrails (`app/guardrails.py`)
 - **Prompt Injection Defense**:
-  - Pre-execution scanning for jailbreak heuristics and instruction bypass patterns:
+  - Scans for jailbreak signatures and system prompt override attempts:
     - `ignore (all )?previous instructions`
     - `system prompt`
     - `jailbreak`
-  - Blocks suspicious queries before any external LLM invocation, saving costs and preventing system prompt leaks.
+  - Instantly blocks adversarial inputs before LLM invocation.
 - **Sensitive PII Detection & In-Place Redaction**:
-  - Automatically identifies and masks Personally Identifiable Information (PII) before the payload leaves the gateway:
+  - Automatically masks Personally Identifiable Information:
     - **Aadhaar Numbers**: `\b\d{4}\s?\d{4}\s?\d{4}\b` $\rightarrow$ `[REDACTED_AADHAAR]`
     - **PAN Numbers**: `\b[A-Z]{5}[0-9]{4}[A-Z]\b` $\rightarrow$ `[REDACTED_PAN]`
     - **Email Addresses**: Standard email regex $\rightarrow$ `[REDACTED_EMAIL]`
     - **Indian Phone Numbers**: Standard $+91$ and 10-digit formats $\rightarrow$ `[REDACTED_PHONE]`
-  - Emits security audit flags (`security_flags`) in the API response.
+  - Emits triggered audit tags in `security_flags`.
 
-### 3. State-Driven Agent Pipeline (`app/graph.py`)
+### 4. State-Driven Agent Pipeline (`app/graph.py`)
 - Built on **LangGraph** `StateGraph` for predictable, deterministic execution.
-- **`AgentState` Schema**:
-  - `messages`: Conversation history maintained with `add_messages` reducer.
-  - `is_safe`: Boolean flag determining whether the request passed security inspection.
-  - `flags`: List of triggered security/privacy tags (e.g., `PROMPT_INJECTION`, `EMAIL`, `PAN`).
-- **Conditional Routing**:
-  - `route_after_guard`: Only forwards safe queries to the `llm` node. Unsafe queries terminate directly at `END`.
+- Dynamic environment configuration: reads `LITELLM_BASE_URL` (seamlessly switching between `http://localhost:4000/v1` and Docker's `http://litellm:4000/v1`).
+- Conditional routing terminates blocked requests immediately at `END`.
 
-### 4. RESTful API & Prometheus Observability (`app/main.py`)
-- High-performance asynchronous endpoints powered by **FastAPI**.
-- Exposes standard OpenAPI documentation at `/docs`.
-- Native **Prometheus Instrumentation** (`prometheus-fastapi-instrumentator`) exposing metrics at `/metrics` (request counts, latency histograms, error rates).
-
-### 5. Automated Testing & Continuous Integration (CI/CD)
-- **Pytest Suite (`tests/test_gateway.py`)**: Covers unit-level deterministic PII redaction, prompt injection interception via `TestClient`, and live output quality evals.
-- **GitHub Actions Workflow (`.github/workflows/ci.yml`)**: Automatically triggers on `push` and `pull_request` to `main`, installing dependencies with `astral-sh/setup-uv@v4` and running test verification.
+### 5. Observability, Automated Tests & CI/CD
+- **Prometheus Metrics**: Exposes HTTP duration, throughput, and error histograms at `/metrics`.
+- **Automated Pytest Suite (`tests/test_gateway.py`)**: Unit tests for deterministic PII redaction and API integration tests for prompt injection blocks.
+- **GitHub Actions (`.github/workflows/ci.yml`)**: Continuous integration on push/PR to `main` with `astral-sh/setup-uv@v4`.
 
 ---
 
@@ -109,7 +109,9 @@ enterprise-ai-gateway/
 ├── .env.example              # Template for environment configuration
 ├── .gitignore                # Git ignore configuration
 ├── CHANGELOG.md              # Project version history and change logs
-├── litellm_config.yaml       # LiteLLM router, fallback & cache configuration
+├── docker-compose.yml        # Docker Compose configuration (Redis, LiteLLM, Gateway)
+├── Dockerfile                # Multi-stage Docker build file for Gateway
+├── litellm_config.yaml       # LiteLLM router, fallback & Redis cache configuration
 ├── pyproject.toml            # Project configuration, dependencies & pytest settings
 ├── requirements.txt          # Python dependencies for pip installation
 └── README.md                 # Project documentation
@@ -120,53 +122,21 @@ enterprise-ai-gateway/
 ## Getting Started
 
 ### Prerequisites
-- **Python**: Version `3.10+` (Project configured for Python `3.14`)
+- **Docker & Docker Compose** (for containerized deployment)
+- **Python**: Version `3.10+` (if running locally without Docker)
 - **API Keys**:
   - [Groq API Key](https://console.groq.com/) (Primary model)
   - [Google Gemini API Key](https://aistudio.google.com/) (Fallback model)
-- Package manager: `uv` (recommended) or standard `pip`
 
-### 1. Clone & Set Up Virtual Environment
+### Configure Environment Variables
 
-#### Using `uv` (Recommended)
-```bash
-# Clone the repository
-git clone <your-repo-url>
-cd enterprise-ai-gateway
-
-# Create and activate a virtual environment
-uv venv
-# On Windows:
-.venv\Scripts\activate
-# On Linux/macOS:
-source .venv/bin/activate
-
-# Install dependencies
-uv sync
-```
-
-#### Using `pip`
-```bash
-python -m venv .venv
-
-# On Windows:
-.venv\Scripts\activate
-# On Linux/macOS:
-source .venv/bin/activate
-
-# Install dependencies from requirements.txt
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment Variables
-
-Create a `.env` file in the project root:
+Create your `.env` file from the provided template:
 
 ```bash
 cp .env.example .env
 ```
 
-Set your API credentials in `.env`:
+Populate your credentials in `.env`:
 
 ```env
 GROQ_API_KEY="gsk_your_groq_api_key_here"
@@ -176,85 +146,106 @@ LITELLM_MASTER_KEY="sk-enterprise-gateway-master-key"
 
 ---
 
-## Running the Application
+## Running with Docker Compose (Recommended)
 
-The system consists of two coordinated services:
-1. **LiteLLM Proxy Router** (Port `4000`): Handles multi-model routing, fallbacks, and caching.
-2. **FastAPI Gateway** (Port `8000`): Handles guardrails, LangGraph orchestration, API endpoints, and metrics.
-
-### Step 1: Start the LiteLLM Proxy Router
-In a terminal window:
+Start the full microservices stack (Redis + LiteLLM + AI Gateway):
 
 ```bash
-# Using litellm CLI
+# Build and launch all containers in detached mode
+docker compose up --build -d
+```
+
+### Checking Service Status
+```bash
+# View running containers and health status
+docker compose ps
+```
+
+### Viewing Logs
+```bash
+# Follow logs across all services
+docker compose logs -f
+
+# Or follow only the gateway app logs
+docker compose logs -f ai-gateway-app
+```
+
+### Stopping the Stack
+```bash
+docker compose down
+```
+
+---
+
+## Running Locally (Standalone / Without Docker)
+
+If you prefer to run services individually without Docker:
+
+### 1. Install Dependencies
+```bash
+# Using uv (recommended)
+uv sync
+
+# Or using pip
+pip install -r requirements.txt
+```
+
+### 2. Start LiteLLM Proxy (Terminal 1)
+```bash
 litellm --config litellm_config.yaml --port 4000
-
-# Or using uv
-uv run litellm --config litellm_config.yaml --port 4000
 ```
 
-### Step 2: Start the FastAPI AI Gateway
-In a separate terminal window:
-
+### 3. Start FastAPI Gateway (Terminal 2)
 ```bash
-# Using uvicorn directly
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-# Or with uv
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-The gateway will be accessible at:
-- **API Base URL**: `http://localhost:8000`
-- **Interactive Swagger Docs**: `http://localhost:8000/docs`
-- **ReDoc Documentation**: `http://localhost:8000/redoc`
-- **Prometheus Metrics**: `http://localhost:8000/metrics`
-- **LiteLLM Proxy Admin / Health**: `http://localhost:4000/health`
+---
+
+## Service Endpoints
+
+| Service / Tool | URL | Description |
+|---|---|---|
+| **AI Gateway Base** | `http://localhost:8000` | Gateway application root |
+| **Interactive API Docs** | `http://localhost:8000/docs` | Swagger UI for testing endpoints |
+| **ReDoc Specification** | `http://localhost:8000/redoc` | OpenAPI documentation |
+| **Prometheus Telemetry** | `http://localhost:8000/metrics` | Scrape target for Prometheus / Grafana |
+| **LiteLLM Proxy Router** | `http://localhost:4000` | Multi-model proxy root |
+| **LiteLLM Health** | `http://localhost:4000/health` | Proxy health & provider connectivity |
+| **Redis Cache** | `localhost:6379` | In-memory distributed completion cache |
 
 ---
 
 ## Testing & Quality Assurance
 
-The repository includes automated unit and integration tests under the `tests/` directory.
-
-### Running Tests Locally
-
 ```bash
-# Using uv (recommended)
+# Run pytest with uv
 uv run pytest -v
 
-# Using pytest directly
+# Or with pytest directly
 pytest -v
 ```
 
-### Test Suite Overview (`tests/test_gateway.py`)
-1. **`test_pii_redaction_deterministic`**:
-   - Validates that email addresses, 10-digit Indian mobile numbers, and PAN cards are correctly identified and replaced with `[REDACTED_*]` tags without external API calls.
-2. **`test_prompt_injection_blocked_at_api`**:
-   - Uses FastAPI's `TestClient` to send adversarial jailbreak payloads (`Ignore all previous instructions...`) to `/chat`, asserting that the request is intercepted with `PROMPT_INJECTION` flag and blocked message.
-3. **`test_live_gateway_response_quality`**:
-   - Live integration test verifying model output quality.
-   - Automatically skips if `GROQ_API_KEY` is not present in the environment (`@pytest.mark.skipif`).
+### Test Coverage (`tests/test_gateway.py`)
+1. **`test_pii_redaction_deterministic`**: Validates offline masking of Email, Phone, and PAN.
+2. **`test_prompt_injection_blocked_at_api`**: Verifies that jailbreak queries receive a security policy block.
+3. **`test_live_gateway_response_quality`**: Evaluates live upstream output quality when `GROQ_API_KEY` is present.
 
 ---
 
 ## Continuous Integration (CI/CD)
 
-Continuous integration is handled by **GitHub Actions** via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
-
-- **Triggers**: On every `push` and `pull_request` targeting the `main` branch.
-- **Workflow Steps**:
-  1. Checks out repository code (`actions/checkout@v4`).
-  2. Sets up `uv` package manager (`astral-sh/setup-uv@v4`).
-  3. Hydrates frozen dependencies (`uv sync --frozen`).
-  4. Executes security and guardrail tests (`uv run pytest -v`).
+The GitHub Actions workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) triggers on every `push` and `pull_request` targeting `main`:
+- Clones repository code.
+- Installs `uv` via `astral-sh/setup-uv@v4`.
+- Hydrates locked dependencies (`uv sync --frozen`).
+- Executes test suite (`uv run pytest -v`).
 
 ---
 
 ## API Usage & Examples
 
 ### 1. Normal Chat Request
-**Request:**
 ```bash
 curl -X POST "http://localhost:8000/chat" \
      -H "Content-Type: application/json" \
@@ -264,7 +255,7 @@ curl -X POST "http://localhost:8000/chat" \
 **Response:**
 ```json
 {
-  "reply": "1. Centralized Security and PII Redaction\n2. Multi-Model Routing and Automatic Failover\n3. Observability, Cost Control, and Caching",
+  "reply": "1. Centralized Security and PII Redaction\n2. Multi-Model Routing and Automatic Failover\n3. Observability, Cost Control, and Distributed Caching",
   "security_flags": []
 }
 ```
@@ -272,9 +263,6 @@ curl -X POST "http://localhost:8000/chat" \
 ---
 
 ### 2. PII Sanitization (Auto-Redaction)
-Send a message containing sensitive PII (Aadhaar, PAN, Email, or Phone Number):
-
-**Request:**
 ```bash
 curl -X POST "http://localhost:8000/chat" \
      -H "Content-Type: application/json" \
@@ -292,14 +280,10 @@ curl -X POST "http://localhost:8000/chat" \
   ]
 }
 ```
-*Note: The upstream LLM only receives `[REDACTED_*]` tokens, preventing sensitive data leakage.*
 
 ---
 
 ### 3. Prompt Injection Defense
-Send an adversarial prompt attempting to override instructions:
-
-**Request:**
 ```bash
 curl -X POST "http://localhost:8000/chat" \
      -H "Content-Type: application/json" \
@@ -315,23 +299,6 @@ curl -X POST "http://localhost:8000/chat" \
   ]
 }
 ```
-*Note: The request is blocked at the gateway level without invoking any external LLM.*
-
----
-
-### 4. Multi-Model Failover in Action
-If Groq encounters rate limiting (HTTP 429) or temporary degradation, the LiteLLM router automatically retries and routes the sanitized query to **Google Gemini 2.5 Flash**, returning a successful response without client disruption.
-
----
-
-### 5. Prometheus Metrics Endpoint
-Scrape telemetry at `GET /metrics`:
-
-```bash
-curl -X GET "http://localhost:8000/metrics"
-```
-
-Metrics include request durations, status code counts (`http_requests_total`), and system metrics ready for Prometheus/Grafana integration.
 
 ---
 
@@ -341,9 +308,9 @@ See [CHANGELOG.md](file:///d:/enterprise-ai-gateway/CHANGELOG.md) for full versi
 
 ---
 
-## What's Next / Roadmap
+## Roadmap
 
-- [ ] **Rate Limiting & Quota Management**: Token-bucket algorithm per tenant using Redis.
-- [ ] **Semantic Vector Caching**: Cache semantically similar queries using vector embeddings.
-- [ ] **Output Guardrails**: Verification of LLM outputs (hallucination detection, toxicity, output PII checks).
-- [ ] **Tenant Token Budgeting**: Real-time cost tracking and limits per client organization.
+- [ ] **Token-Bucket Rate Limiting**: Per-tenant rate limits enforced directly in Redis.
+- [ ] **Semantic Vector Caching**: Approximate vector similarity matching with pgvector / Qdrant.
+- [ ] **Output Guardrails**: Verification of responses for hallucinations and toxicity.
+- [ ] **Tenant Cost & Budget Tracking**: Multi-tenant token attribution and accounting.

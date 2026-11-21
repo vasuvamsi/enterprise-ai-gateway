@@ -1,3 +1,4 @@
+import os
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -9,8 +10,8 @@ load_dotenv()
 
 llm = ChatOpenAI(
     model="enterprise-chat",
-    base_url="http://localhost:4000/v1",
-    api_key="sk-local-gateway",
+    base_url=os.getenv("LITELLM_BASE_URL", "http://localhost:4000/v1"),
+    api_key=os.getenv("LITELLM_MASTER_KEY", "sk-enterprise-gateway-2026"),
     temperature=0,
 )
 

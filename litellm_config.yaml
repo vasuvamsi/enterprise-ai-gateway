@@ -15,4 +15,7 @@ router_settings:
 litellm_settings:
   cache: true
   cache_params:
-    type: local
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+    ttl: 3600

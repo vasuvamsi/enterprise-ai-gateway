@@ -13,6 +13,9 @@ langchain-groq>=1.2.1
 # AI Gateway, Router & Multi-Model Proxy
 litellm[proxy]>=1.110.2
 
+# Distributed Caching & Storage
+redis>=5.0.0
+
 # Metrics & Observability
 prometheus-fastapi-instrumentator>=8.1.0
 
