@@ -7,7 +7,9 @@ requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.165.0",
     "langchain-groq>=1.2.1",
+    "langchain-openai>=1.8.5",
     "langgraph>=1.2.24",
+    "litellm[proxy]>=1.110.2",
     "prometheus-fastapi-instrumentator>=8.1.0",
     "pydantic-settings>=2.16.3",
     "python-dotenv>=1.2.4",
@@ -20,3 +22,6 @@ enterprise-ai-gateway = "enterprise_ai_gateway:main"
 [build-system]
 requires = ["uv_build>=0.13.8,<0.14.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+package = false

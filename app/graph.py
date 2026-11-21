@@ -3,9 +3,16 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_groq import ChatGroq
 from app.guardrails import check_and_redact
+from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 load_dotenv()
 
+llm = ChatOpenAI(
+    model="enterprise-chat",
+    base_url="http://localhost:4000/v1",
+    api_key="sk-local-gateway",
+    temperature=0,
+)
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]

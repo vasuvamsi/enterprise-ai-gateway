@@ -1,0 +1,18 @@
+model_list:
+  - model_name: enterprise-chat
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+  - model_name: enterprise-chat-fallback
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+router_settings:
+  fallbacks: [{"enterprise-chat": ["enterprise-chat-fallback"]}]
+  num_retries: 2
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: local
