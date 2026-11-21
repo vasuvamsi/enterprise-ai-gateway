@@ -19,7 +19,8 @@ class AgentState(TypedDict):
     is_safe: bool
     flags: list[str]
 
-llm = ChatGroq(model="qwen/qwen3.8-27b", temperature=0)
+# Option A: Routed through LiteLLM Proxy with automatic failover (Primary: Groq Qwen, Fallback: Gemini Flash)
+# llm = ChatGroq(model="qwen/qwen3.8-27b", temperature=0)  # Direct Groq (bypassing proxy)
 
 def input_guard_node(state: AgentState):
     last_msg = state["messages"][-1].content

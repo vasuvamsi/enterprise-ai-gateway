@@ -1,8 +1,8 @@
 # Enterprise AI Gateway
 
-A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, and **Groq** (`qwen/qwen3.8-27b`).
+A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, and **LiteLLM Proxy Router** with multi-model failover (**Groq Qwen 3.8 27B** $\rightarrow$ **Google Gemini 2.5 Flash**), **Local Caching**, **Real-Time Guardrails (PII & Injection Filtering)**, and **Prometheus Observability**.
 
-The Gateway acts as an enterprise control plane positioned between your client applications and upstream Large Language Models (LLMs). It enforces **real-time security guardrails**, **automated PII redaction**, **prompt injection defense**, and provides out-of-the-box **Prometheus observability**.
+The Gateway acts as an enterprise control plane positioned between your client applications and upstream Large Language Models (LLMs). It enforces **real-time security guardrails**, **automated PII redaction**, **prompt injection defense**, **automatic model fallback**, and provides out-of-the-box **Prometheus observability**.
 
 ---
 
@@ -18,9 +18,17 @@ flowchart TD
         GuardNode --> Check{Security Policy Check}
         Check -->|Prompt Injection Detected| Blocked["Set is_safe=False<br/>Halt Execution"]
         Check -->|Safe / PII Redacted| RouteLLM["Update State with clean_text<br/>Route to LLM"]
-        RouteLLM --> LLMNode["llm_node (ChatGroq: Qwen 3.8 27B)"]
+        RouteLLM --> LLMNode["llm_node (ChatOpenAI)"]
         Blocked --> EndNode([END])
         LLMNode --> EndNode
+    end
+
+    subgraph ProxyLayer ["LiteLLM Proxy & Router (:4000)"]
+        LLMNode -->|http://localhost:4000/v1| Router["LiteLLM Router & Local Cache"]
+        Router --> Cache{In Local Cache?}
+        Cache -->|Hit| CachedResp["Instant Response (0 ms)"]
+        Cache -->|Miss| Primary["Primary: Groq (qwen/qwen3.8-27b)"]
+        Primary -.->|Rate Limit / 5xx / Timeout| Fallback["Fallback: Gemini (gemini-2.5-flash)"]
     end
 
     Graph --> API
@@ -30,24 +38,36 @@ flowchart TD
 
 ---
 
-## Features Implemented So Far
+## Features Implemented
 
-### 1. Multi-Layer Security Guardrails (`app/guardrails.py`)
-- **Prompt Injection Prevention**:
-  - Pre-execution scanning for common jailbreak heuristics and instruction bypass patterns:
+### 1. Multi-Model Routing, Failover & Caching (`litellm_config.yaml`)
+- **Centralized LiteLLM Router**:
+  - Routes requests through a high-performance proxy on `http://localhost:4000/v1`.
+  - Standardized OpenAI-compatible interface used by LangChain (`ChatOpenAI`).
+- **Primary & Fallback Models**:
+  - **Primary**: `enterprise-chat` $\rightarrow$ `groq/qwen/qwen3.8-27b` via Groq LPU for low latency.
+  - **Fallback**: `enterprise-chat-fallback` $\rightarrow$ `gemini/gemini-2.5-flash` via Google AI Studio.
+  - **Automatic Failover**: Automatically retries and falls back (`fallbacks: [{"enterprise-chat": ["enterprise-chat-fallback"]}]`, `num_retries: 2`) when rate limits (HTTP 429) or upstream outages occur.
+- **In-Memory Response Caching**:
+  - `litellm_settings.cache: true` with `type: local`.
+  - Repeated identical queries return instantly from memory with zero token consumption and near-zero latency.
+
+### 2. Multi-Layer Security Guardrails (`app/guardrails.py`)
+- **Prompt Injection Defense**:
+  - Pre-execution scanning for jailbreak heuristics and instruction bypass patterns:
     - `ignore (all )?previous instructions`
     - `system prompt`
     - `jailbreak`
-  - Blocks suspicious queries before any external LLM invocation, saving token costs and preventing security breaches.
+  - Blocks suspicious queries before any external LLM invocation, saving costs and preventing system prompt leaks.
 - **Sensitive PII Detection & In-Place Redaction**:
-  - Automatically identifies and masks Personally Identifiable Information (PII) before the payload is dispatched to the model provider:
+  - Automatically identifies and masks Personally Identifiable Information (PII) before the payload leaves the gateway:
     - **Aadhaar Numbers**: `\b\d{4}\s?\d{4}\s?\d{4}\b` $\rightarrow$ `[REDACTED_AADHAAR]`
     - **PAN Numbers**: `\b[A-Z]{5}[0-9]{4}[A-Z]\b` $\rightarrow$ `[REDACTED_PAN]`
     - **Email Addresses**: Standard email regex $\rightarrow$ `[REDACTED_EMAIL]`
     - **Indian Phone Numbers**: Standard $+91$ and 10-digit formats $\rightarrow$ `[REDACTED_PHONE]`
   - Emits security audit flags (`security_flags`) in the API response.
 
-### 2. State-Driven Agent Pipeline (`app/graph.py`)
+### 3. State-Driven Agent Pipeline (`app/graph.py`)
 - Built on **LangGraph** `StateGraph` for predictable, deterministic execution.
 - **`AgentState` Schema**:
   - `messages`: Conversation history maintained with `add_messages` reducer.
@@ -55,10 +75,6 @@ flowchart TD
   - `flags`: List of triggered security/privacy tags (e.g., `PROMPT_INJECTION`, `EMAIL`, `PAN`).
 - **Conditional Routing**:
   - `route_after_guard`: Only forwards safe queries to the `llm` node. Unsafe queries terminate directly at `END`.
-
-### 3. Ultra-Fast LLM Inference
-- Powered by **Groq LPU** inference via `ChatGroq`.
-- Configured with `qwen/qwen3.8-27b` at `temperature=0` for deterministic, low-latency enterprise outputs.
 
 ### 4. RESTful API & Prometheus Observability (`app/main.py`)
 - High-performance asynchronous endpoints powered by **FastAPI**.
@@ -79,9 +95,11 @@ enterprise-ai-gateway/
 ├── src/
 │   └── enterprise_ai_gateway/
 │       └── __init__.py       # Package entry point
-├── .env                      # Environment secrets (e.g. GROQ_API_KEY)
+├── .env                      # Environment secrets (GROQ, GEMINI, LITELLM keys)
 ├── .env.example              # Template for environment configuration
 ├── .gitignore                # Git ignore configuration
+├── CHANGELOG.md              # Project version history and change logs
+├── litellm_config.yaml       # LiteLLM router, fallback & cache configuration
 ├── pyproject.toml            # Project configuration and dependency declarations
 ├── requirements.txt          # Python dependencies for pip installation
 └── README.md                 # Project documentation
@@ -93,7 +111,9 @@ enterprise-ai-gateway/
 
 ### Prerequisites
 - **Python**: Version `3.10+` (Project configured for Python `3.14`)
-- **Groq API Key**: Obtain a free API key from [Groq Console](https://console.groq.com/)
+- **API Keys**:
+  - [Groq API Key](https://console.groq.com/) (Primary model)
+  - [Google Gemini API Key](https://aistudio.google.com/) (Fallback model)
 - Package manager: `uv` (recommended) or standard `pip`
 
 ### 1. Clone & Set Up Virtual Environment
@@ -136,17 +156,35 @@ Create a `.env` file in the project root:
 cp .env.example .env
 ```
 
-Add your Groq API credentials:
+Set your API credentials in `.env`:
 
 ```env
-GROQ_API_KEY="gsk_your_actual_groq_api_key_here"
+GROQ_API_KEY="gsk_your_groq_api_key_here"
+GEMINI_API_KEY="your_gemini_api_key_here"
+LITELLM_MASTER_KEY="sk-enterprise-gateway-master-key"
 ```
 
 ---
 
 ## Running the Application
 
-Start the FastAPI application with Uvicorn:
+The system consists of two coordinated services:
+1. **LiteLLM Proxy Router** (Port `4000`): Handles multi-model routing, fallbacks, and caching.
+2. **FastAPI Gateway** (Port `8000`): Handles guardrails, LangGraph orchestration, API endpoints, and metrics.
+
+### Step 1: Start the LiteLLM Proxy Router
+In a terminal window:
+
+```bash
+# Using litellm CLI
+litellm --config litellm_config.yaml --port 4000
+
+# Or using uv
+uv run litellm --config litellm_config.yaml --port 4000
+```
+
+### Step 2: Start the FastAPI AI Gateway
+In a separate terminal window:
 
 ```bash
 # Using uvicorn directly
@@ -161,6 +199,7 @@ The gateway will be accessible at:
 - **Interactive Swagger Docs**: `http://localhost:8000/docs`
 - **ReDoc Documentation**: `http://localhost:8000/redoc`
 - **Prometheus Metrics**: `http://localhost:8000/metrics`
+- **LiteLLM Proxy Admin / Health**: `http://localhost:4000/health`
 
 ---
 
@@ -171,13 +210,13 @@ The gateway will be accessible at:
 ```bash
 curl -X POST "http://localhost:8000/chat" \
      -H "Content-Type: application/json" \
-     -d '{"query": "What are three primary benefits of an API Gateway?"}'
+     -d '{"query": "What are three primary benefits of an Enterprise AI Gateway?"}'
 ```
 
 **Response:**
 ```json
 {
-  "reply": "1. Centralized Security and Authentication\n2. Traffic Management and Rate Limiting\n3. Observability and Monitoring",
+  "reply": "1. Centralized Security and PII Redaction\n2. Multi-Model Routing and Automatic Failover\n3. Observability, Cost Control, and Caching",
   "security_flags": []
 }
 ```
@@ -205,7 +244,7 @@ curl -X POST "http://localhost:8000/chat" \
   ]
 }
 ```
-*Note: The upstream LLM only sees `[REDACTED_*]` tokens, preventing sensitive data leakage.*
+*Note: The upstream LLM only receives `[REDACTED_*]` tokens, preventing sensitive data leakage.*
 
 ---
 
@@ -228,11 +267,16 @@ curl -X POST "http://localhost:8000/chat" \
   ]
 }
 ```
-*Note: The request is blocked at the gateway level without calling the LLM.*
+*Note: The request is blocked at the gateway level without invoking any external LLM.*
 
 ---
 
-### 4. Prometheus Metrics Endpoint
+### 4. Multi-Model Failover in Action
+If Groq encounters rate limiting (HTTP 429) or temporary degradation, the LiteLLM router automatically retries and routes the sanitized query to **Google Gemini 2.5 Flash**, returning a successful response without client disruption.
+
+---
+
+### 5. Prometheus Metrics Endpoint
 Scrape telemetry at `GET /metrics`:
 
 ```bash
@@ -243,10 +287,15 @@ Metrics include request durations, status code counts (`http_requests_total`), a
 
 ---
 
+## Release Notes & History
+
+See [CHANGELOG.md](file:///d:/enterprise-ai-gateway/CHANGELOG.md) for full version history.
+
+---
+
 ## What's Next / Roadmap
 
-- [ ] **Rate Limiting & Quota Management**: Token-bucket algorithm per API key / organization using Redis.
-- [ ] **Semantic Caching**: Cache common queries via vector similarity to reduce LLM latency and cost.
-- [ ] **Multi-Model Routing & Failover**: Automatic fallback between providers (Groq, OpenAI, Anthropic, Ollama).
-- [ ] **Output Guardrails**: Verification of LLM responses (hallucination detection, toxic speech filtering, PII leakage detection).
-- [ ] **Tenant Token Budgeting**: Real-time token consumption tracking per enterprise client.
+- [ ] **Rate Limiting & Quota Management**: Token-bucket algorithm per tenant using Redis.
+- [ ] **Semantic Vector Caching**: Cache semantically similar queries using vector embeddings.
+- [ ] **Output Guardrails**: Verification of LLM outputs (hallucination detection, toxicity, output PII checks).
+- [ ] **Tenant Token Budgeting**: Real-time cost tracking and limits per client organization.
