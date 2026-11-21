@@ -6,14 +6,18 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.165.0",
+    "httpx>=0.28.1",
+    "langchain-core>=1.8.4",
     "langchain-groq>=1.2.1",
     "langchain-openai>=1.8.5",
     "langgraph>=1.2.24",
     "litellm[proxy]>=1.110.2",
     "prometheus-fastapi-instrumentator>=8.1.0",
+    "pydantic>=2.14.4",
     "pydantic-settings>=2.16.3",
+    "pytest>=9.2.0",
     "python-dotenv>=1.2.4",
-    "uvicorn>=0.54.0",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
@@ -25,3 +29,6 @@ build-backend = "uv_build"
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

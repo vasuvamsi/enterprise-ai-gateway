@@ -5,6 +5,24 @@ All notable changes to the **Enterprise AI Gateway** project will be documented 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-21
+
+### Added
+- **Automated Test Suite (`tests/test_gateway.py`)**:
+  - Deterministic unit testing for PII regex detection and redaction (Email, Indian Phone, and PAN) without external network dependencies (`test_pii_redaction_deterministic`).
+  - End-to-end integration test asserting that prompt injection attacks are intercepted at the `/chat` endpoint and return security policy violations (`test_prompt_injection_blocked_at_api`).
+  - Live LLM response quality test using `pytest.mark.skipif` to conditionally run only when `GROQ_API_KEY` is present (`test_live_gateway_response_quality`).
+  - Package marker `tests/__init__.py`.
+- **Continuous Integration (CI) Workflow (`.github/workflows/ci.yml`)**:
+  - GitHub Actions workflow triggering on `push` and `pull_request` targeting the `main` branch.
+  - Setup using `astral-sh/setup-uv@v4` for fast locked dependency hydration (`uv sync --frozen`).
+  - Automated security, guardrail, and quality test execution via `uv run pytest -v`.
+- **Test Configuration & Dependencies**:
+  - Added `pytest>=9.2.0` and `httpx>=0.28.1` (required for FastAPI `TestClient`) to `pyproject.toml` and `requirements.txt`.
+  - Configured `[tool.pytest.ini_options]` with `pythonpath = ["."]` in `pyproject.toml` for root-relative test imports.
+
+---
+
 ## [0.2.0] - 2026-11-21
 
 ### Added

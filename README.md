@@ -1,6 +1,6 @@
 # Enterprise AI Gateway
 
-A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, and **LiteLLM Proxy Router** with multi-model failover (**Groq Qwen 3.8 27B** $\rightarrow$ **Google Gemini 2.5 Flash**), **Local Caching**, **Real-Time Guardrails (PII & Injection Filtering)**, and **Prometheus Observability**.
+A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, and **LiteLLM Proxy Router** with multi-model failover (**Groq Qwen 3.8 27B** $\rightarrow$ **Google Gemini 2.5 Flash**), **Local Caching**, **Real-Time Guardrails (PII & Injection Filtering)**, **Automated Pytest Testing**, **GitHub Actions CI/CD**, and **Prometheus Observability**.
 
 The Gateway acts as an enterprise control plane positioned between your client applications and upstream Large Language Models (LLMs). It enforces **real-time security guardrails**, **automated PII redaction**, **prompt injection defense**, **automatic model fallback**, and provides out-of-the-box **Prometheus observability**.
 
@@ -81,17 +81,27 @@ flowchart TD
 - Exposes standard OpenAPI documentation at `/docs`.
 - Native **Prometheus Instrumentation** (`prometheus-fastapi-instrumentator`) exposing metrics at `/metrics` (request counts, latency histograms, error rates).
 
+### 5. Automated Testing & Continuous Integration (CI/CD)
+- **Pytest Suite (`tests/test_gateway.py`)**: Covers unit-level deterministic PII redaction, prompt injection interception via `TestClient`, and live output quality evals.
+- **GitHub Actions Workflow (`.github/workflows/ci.yml`)**: Automatically triggers on `push` and `pull_request` to `main`, installing dependencies with `astral-sh/setup-uv@v4` and running test verification.
+
 ---
 
 ## Project Structure
 
 ```text
 enterprise-ai-gateway/
+├── .github/
+│   └── workflows/
+│       └── ci.yml            # GitHub Actions CI workflow (lint & test)
 ├── app/
-│   ├── __init__.py           # Package marker
+│   ├── __init__.py           # Application package marker
 │   ├── graph.py              # LangGraph workflow, state definition & conditional routing
 │   ├── guardrails.py         # Regex engines for PII redaction & prompt injection defense
 │   └── main.py               # FastAPI application, routes, and Prometheus instrumentation
+├── tests/
+│   ├── __init__.py           # Test package marker
+│   └── test_gateway.py       # PII, prompt injection, and gateway test suite
 ├── src/
 │   └── enterprise_ai_gateway/
 │       └── __init__.py       # Package entry point
@@ -100,7 +110,7 @@ enterprise-ai-gateway/
 ├── .gitignore                # Git ignore configuration
 ├── CHANGELOG.md              # Project version history and change logs
 ├── litellm_config.yaml       # LiteLLM router, fallback & cache configuration
-├── pyproject.toml            # Project configuration and dependency declarations
+├── pyproject.toml            # Project configuration, dependencies & pytest settings
 ├── requirements.txt          # Python dependencies for pip installation
 └── README.md                 # Project documentation
 ```
@@ -200,6 +210,44 @@ The gateway will be accessible at:
 - **ReDoc Documentation**: `http://localhost:8000/redoc`
 - **Prometheus Metrics**: `http://localhost:8000/metrics`
 - **LiteLLM Proxy Admin / Health**: `http://localhost:4000/health`
+
+---
+
+## Testing & Quality Assurance
+
+The repository includes automated unit and integration tests under the `tests/` directory.
+
+### Running Tests Locally
+
+```bash
+# Using uv (recommended)
+uv run pytest -v
+
+# Using pytest directly
+pytest -v
+```
+
+### Test Suite Overview (`tests/test_gateway.py`)
+1. **`test_pii_redaction_deterministic`**:
+   - Validates that email addresses, 10-digit Indian mobile numbers, and PAN cards are correctly identified and replaced with `[REDACTED_*]` tags without external API calls.
+2. **`test_prompt_injection_blocked_at_api`**:
+   - Uses FastAPI's `TestClient` to send adversarial jailbreak payloads (`Ignore all previous instructions...`) to `/chat`, asserting that the request is intercepted with `PROMPT_INJECTION` flag and blocked message.
+3. **`test_live_gateway_response_quality`**:
+   - Live integration test verifying model output quality.
+   - Automatically skips if `GROQ_API_KEY` is not present in the environment (`@pytest.mark.skipif`).
+
+---
+
+## Continuous Integration (CI/CD)
+
+Continuous integration is handled by **GitHub Actions** via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+
+- **Triggers**: On every `push` and `pull_request` targeting the `main` branch.
+- **Workflow Steps**:
+  1. Checks out repository code (`actions/checkout@v4`).
+  2. Sets up `uv` package manager (`astral-sh/setup-uv@v4`).
+  3. Hydrates frozen dependencies (`uv sync --frozen`).
+  4. Executes security and guardrail tests (`uv run pytest -v`).
 
 ---
 

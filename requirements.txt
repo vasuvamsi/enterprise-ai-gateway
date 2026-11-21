@@ -20,3 +20,7 @@ prometheus-fastapi-instrumentator>=8.1.0
 pydantic>=2.14.4
 pydantic-settings>=2.16.3
 python-dotenv>=1.2.4
+
+# Testing & Quality Assurance
+pytest>=9.2.0
+httpx>=0.28.1
