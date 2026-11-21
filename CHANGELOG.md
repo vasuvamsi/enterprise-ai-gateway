@@ -5,6 +5,30 @@ All notable changes to the **Enterprise AI Gateway** project will be documented 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-21
+
+### Added
+- **Full-Stack Observability with Prometheus & Grafana (`docker-compose.yml`)**:
+  - Expanded the Docker Compose orchestration to a **5-container enterprise stack**:
+    1. `redis` (`redis:7-alpine`): Distributed caching backend.
+    2. `litellm`: Unified multi-model routing proxy.
+    3. `ai-gateway-app`: Core FastAPI & LangGraph gateway.
+    4. `prometheus` (`prom/prometheus:latest`): Time-series metrics engine scraping gateway metrics at 5-second intervals on port `9090`.
+    5. `grafana` (`grafana/grafana:latest`): Visualization portal with auto-provisioned dashboards on port `3000`.
+- **Automated Grafana Provisioning (`grafana/provisioning/`)**:
+  - **Datasource Provisioning (`grafana/provisioning/datasources/prometheus.yml`)**: Automatically registers the internal Prometheus service (`http://prometheus:9090`) as the default datasource on container launch.
+  - **Dashboard Provisioning (`grafana/provisioning/dashboards/dashboard.yml`)**: Auto-loads dashboards from `/var/lib/grafana/dashboards` with zero manual UI setup.
+- **Pre-Configured Enterprise AI Gateway Dashboard (`grafana/dashboards/ai-gateway-dashboard.json`)**:
+  - Pre-built Grafana dashboard titled **"Enterprise AI Gateway Observability"** (`ai-gateway-overview`) with 5-second auto-refresh.
+  - **Panel 1 - Total Requests & Guardrail Blocks**: Time-series breakdown of requests by HTTP status (`http_requests_total{handler="/chat"}`), tracking 2xx approvals vs. policy blocks.
+  - **Panel 2 - Average Request Latency**: Real-time calculation of average gateway latency in seconds using rate quotients (`rate(http_request_duration_seconds_sum) / rate(...)`).
+- **Prometheus Configuration (`prometheus.yml`)**:
+  - Created root Prometheus scrape config targeting `ai-gateway-app:8000/metrics` with 5s evaluation interval.
+- **Documentation**:
+  - Embedded live Grafana telemetry dashboard screenshot (`grafana-dashboard.png`) into `README.md`.
+
+---
+
 ## [0.4.1] - 2026-11-21
 
 ### Changed
@@ -22,25 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Multi-Container Docker Orchestration (`docker-compose.yml`)**:
-  - Full microservices stack with three containerized services:
-    1. `redis` (`redis:7-alpine`): Distributed caching backend with automated health check probe (`redis-cli ping`).
-    2. `litellm`: High-availability AI routing proxy on port `4000`, connected to Redis for shared response caching.
-    3. `ai-gateway-app`: Gateway application container built from local `Dockerfile`, exposing port `8000`.
+  - Full microservices stack with three containerized services (`redis`, `litellm`, `ai-gateway-app`).
   - Configured service health check dependencies: LiteLLM waits for healthy Redis; AI Gateway waits for LiteLLM.
 - **Production Multi-Stage Dockerfile (`Dockerfile`)**:
-  - Optimized multi-stage build.
-  - UV binary extraction for fast locked dependency resolution (`uv sync --locked --no-install-project --no-dev`).
-  - Lean final runtime stage containing only the virtual environment and application code.
+  - Multi-stage build with UV binary hydration and minimal runtime stage.
 - **Distributed Redis Response Caching (`litellm_config.yaml`)**:
-  - Migrated from in-process local memory cache to distributed Redis cache with configurable TTL (`ttl: 3600`).
-  - Added environment variable routing for `REDIS_HOST` and `REDIS_PORT`.
+  - Migrated to distributed Redis cache with configurable TTL (`ttl: 3600`).
 - **Dynamic Gateway Environment Configuration (`app/graph.py`)**:
-  - Made LiteLLM proxy base URL dynamic via `os.getenv("LITELLM_BASE_URL", "http://localhost:4000/v1")` enabling seamless operation both locally and in Docker networks (`http://litellm:4000/v1`).
+  - Made LiteLLM proxy base URL dynamic via `os.getenv("LITELLM_BASE_URL", ...)`.
   - Dynamic master key injection via `os.getenv("LITELLM_MASTER_KEY", ...)`.
 
 ### Fixed
-- Fixed missing `import os` in `app/graph.py` required for environment variable lookups.
-- Resolved conflicting cache type configuration in `litellm_config.yaml` to ensure Redis distributed caching is active.
+- Fixed missing `import os` in `app/graph.py`.
+- Resolved conflicting cache type configuration in `litellm_config.yaml`.
 
 ---
 
@@ -48,17 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Automated Test Suite (`tests/test_gateway.py`)**:
-  - Deterministic unit testing for PII regex detection and redaction (Email, Indian Phone, and PAN) without external network dependencies (`test_pii_redaction_deterministic`).
-  - End-to-end integration test asserting that prompt injection attacks are intercepted at the `/chat` endpoint and return security policy violations (`test_prompt_injection_blocked_at_api`).
-  - Live LLM response quality test using `pytest.mark.skipif` to conditionally run only when `GROQ_API_KEY` is present (`test_live_gateway_response_quality`).
-  - Package marker `tests/__init__.py`.
+  - Deterministic unit testing for PII regex redaction.
+  - End-to-end integration test asserting prompt injection blocks.
+  - Live LLM response quality test using `pytest.mark.skipif`.
 - **Continuous Integration (CI) Workflow (`.github/workflows/ci.yml`)**:
-  - GitHub Actions workflow triggering on `push` and `pull_request` targeting the `main` branch.
-  - Setup using `astral-sh/setup-uv@v4` for fast locked dependency hydration (`uv sync --frozen`).
-  - Automated security, guardrail, and quality test execution via `uv run pytest -v`.
+  - GitHub Actions workflow triggering on `push` and `pull_request` to `main`.
 - **Test Configuration & Dependencies**:
-  - Added `pytest>=9.2.0` and `httpx>=0.28.1` (required for FastAPI `TestClient`) to `pyproject.toml` and `requirements.txt`.
-  - Configured `[tool.pytest.ini_options]` with `pythonpath = ["."]` in `pyproject.toml` for root-relative test imports.
+  - Added `pytest>=9.2.0` and `httpx>=0.28.1` to dependencies.
 
 ---
 
@@ -66,24 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **LiteLLM Proxy & Router Integration (`litellm_config.yaml`)**:
-  - Implemented an enterprise multi-model routing layer with OpenAI-compatible endpoint on port `4000`.
-  - Configured `enterprise-chat` as primary model backed by `groq/qwen/qwen3.8-27b`.
-  - Configured `enterprise-chat-fallback` as secondary model backed by `gemini/gemini-2.5-flash`.
-  - Automated fallback routing policy with `num_retries: 2` on rate limits, network timeouts, or upstream outages.
-  - In-memory local response caching to eliminate redundant LLM calls and cut API costs.
+  - Multi-model routing: Primary `groq/qwen/qwen3.8-27b`, Fallback `gemini/gemini-2.5-flash`.
+  - Automated fallback routing policy with `num_retries: 2`.
+  - In-memory local response caching.
 - **LangChain OpenAI Interface (`app/graph.py`)**:
-  - Integrated `langchain-openai` (`ChatOpenAI`) connecting LangGraph to the local LiteLLM Proxy endpoint (`http://localhost:4000/v1`).
-- **Dependencies**:
-  - Added `litellm[proxy]>=1.110.2` and `langchain-openai>=1.8.5` to `pyproject.toml` and `requirements.txt`.
-- **Environment Configuration**:
-  - Added support for `GEMINI_API_KEY` and `LITELLM_MASTER_KEY` to `.env` and `.env.example`.
-
-### Changed
-- **Agent Graph Pipeline (`app/graph.py`)**:
-  - Redirected LLM execution node to route queries through LiteLLM Proxy rather than calling Groq directly.
-- **Documentation (`README.md`)**:
-  - Updated architecture diagram with LiteLLM proxy routing, multi-model failover, and response caching.
-  - Added step-by-step instructions for running the LiteLLM proxy service alongside the FastAPI gateway.
+  - Integrated `langchain-openai` (`ChatOpenAI`) connecting LangGraph to the local LiteLLM Proxy endpoint.
 
 ---
 
@@ -91,14 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Initial Enterprise AI Gateway Release**:
-  - **FastAPI Core Service (`app/main.py`)**: Asynchronous `/chat` endpoint with request validation via Pydantic (`ChatRequest`).
-  - **LangGraph State Machine (`app/graph.py`)**: Stateful workflow execution (`AgentState`) featuring `input_guard_node`, `llm_node`, and `route_after_guard` conditional routing.
-  - **Security Guardrails Engine (`app/guardrails.py`)**:
-    - Real-time prompt injection heuristics detection (`ignore previous instructions`, `system prompt`, `jailbreak`).
-    - Sensitive PII regex detection and in-place redaction for Indian Aadhaar cards, PAN cards, email addresses, and phone numbers.
-  - **Observability & Telemetry**:
-    - Integrated `prometheus-fastapi-instrumentator` with `/metrics` endpoint.
-  - **Direct LLM Provider**:
-    - Direct integration with Groq API (`ChatGroq`) using `qwen/qwen3.8-27b`.
-  - **Project Scaffolding**:
-    - Environment templates (`.env.example`), `.gitignore`, `pyproject.toml`, and `requirements.txt`.
+  - FastAPI core service with `/chat` and Prometheus `/metrics`.
+  - LangGraph `StateGraph` pipeline with input guard and LLM nodes.
+  - Security guardrails for prompt injection and PII redaction (Aadhaar, PAN, Email, Phone).
+  - Groq `qwen/qwen3.8-27b` provider integration.

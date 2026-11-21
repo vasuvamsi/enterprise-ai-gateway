@@ -1,8 +1,10 @@
 # Enterprise AI Gateway
 
-A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, **LiteLLM Proxy Router**, and **Redis Distributed Caching**. Fully containerized with a unified **Python 3.14** multi-stage **Docker & Docker Compose** stack, featuring automated **Pytest** test suites, **GitHub Actions CI/CD**, and **Prometheus Observability**.
+A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, **LiteLLM Proxy Router**, **Redis Distributed Caching**, and a fully automated **Prometheus & Grafana Observability Stack**. 
 
-The Gateway acts as an enterprise control plane positioned between your client applications and upstream Large Language Models (LLMs). It enforces **real-time security guardrails**, **automated PII redaction**, **prompt injection defense**, **multi-model failover** (**Groq Qwen 3.8 27B** $\rightarrow$ **Google Gemini 2.5 Flash**), and **Redis response caching**.
+The stack is containerized with a unified **Python 3.14** multi-stage **Docker & Docker Compose** architecture featuring automated **Pytest** test suites, **GitHub Actions CI/CD**, and out-of-the-box telemetry dashboards.
+
+The Gateway acts as an enterprise control plane positioned between your client applications and upstream Large Language Models (LLMs). It enforces **real-time security guardrails**, **automated PII redaction**, **prompt injection defense**, **multi-model failover** (**Groq Qwen 3.8 27B** $\rightarrow$ **Google Gemini 2.5 Flash**), **Redis response caching**, and **live Grafana dashboards**.
 
 ---
 
@@ -23,9 +25,11 @@ flowchart TD
         LLMNode --> EndNode
     end
 
-    subgraph DockerCompose ["Docker Compose Stack (Unified Python 3.14 Images)"]
-        Gateway -->|http://litellm:4000/v1| LiteLLM["litellm (LiteLLM Proxy Container :4000)"]
+    subgraph DockerCompose ["Docker Compose Stack (5 Services)"]
+        Gateway -->|http://litellm:4000/v1| LiteLLM["litellm (LiteLLM Proxy :4000)"]
         LiteLLM -->|Cache Check & Store| Redis[("redis:7-alpine (:6379)<br/>TTL: 3600s")]
+        Prometheus["prometheus (:9090)"] -->|Scrapes :8000/metrics every 5s| Gateway
+        Grafana["grafana (:3000)<br/>Auto-Provisioned"] -->|Prometheus Query| Prometheus
     end
 
     subgraph UpstreamProviders ["Upstream LLM Providers"]
@@ -35,24 +39,33 @@ flowchart TD
 
     Graph --> Gateway
     Gateway --> Client
-    Prometheus["Prometheus / Grafana"] -.->|Scrapes GET :8000/metrics| Gateway
+    Operator(["DevOps / SecOps"]) -.->|Inspect Dashboards| Grafana
 ```
 
 ---
 
 ## Features Implemented
 
-### 1. Unified Multi-Container Docker Stack (`docker-compose.yml` & `Dockerfile`)
-- **One-Command Orchestration**: Boots the entire enterprise gateway microservices architecture via `docker compose up --build -d`.
-- **Unified Python 3.14 Base**:
-  - The multi-stage `Dockerfile` uses `python:3.14-slim` across both builder and runtime stages, guaranteeing complete runtime parity with project configurations (`.python-version` and `pyproject.toml`).
-  - Installs `uv` and executes locked sync targeting Python 3.14: `uv sync --python 3.14 --locked --no-install-project --no-dev`.
-- **Shared Unified Image Architecture**:
-  - Both `ai-gateway-app` and `litellm` build from the **single local Dockerfile** (`build: .`), eliminating the need to pull external third-party images.
-  - The `litellm` container runs via the local Python CLI entry point (`python -c "from litellm.proxy.proxy_cli import run_server; run_server()"`).
-- **Service Dependency & Health Guarantees**: `litellm` starts only after `redis:7-alpine` passes health checks (`redis-cli ping`); `ai-gateway-app` depends directly on `litellm`.
+### 1. Full-Stack 5-Container Architecture (`docker-compose.yml`)
+- **One-Command Orchestration**: Boots the entire enterprise gateway and monitoring ecosystem via `docker compose up --build -d`.
+- **5 Orchestrated Services**:
+  1. `redis`: Redis 7 Alpine with native container health checks (`redis-cli ping`).
+  2. `litellm`: Multi-model routing proxy attached to Redis for distributed caching, built from unified local `Dockerfile`.
+  3. `ai-gateway-app`: FastAPI + LangGraph gateway with guardrails, built from unified local `Dockerfile`.
+  4. `prometheus`: Scrapes gateway metrics every 5 seconds on port `9090`.
+  5. `grafana`: Web visualization portal on port `3000` with pre-provisioned dashboards.
+- **Service Dependency & Health Guarantees**: `litellm` waits for healthy Redis; `ai-gateway-app` waits for `litellm`; `grafana` waits for `prometheus`.
 
-### 2. Multi-Model Routing, Failover & Redis Caching (`litellm_config.yaml`)
+### 2. Pre-Configured Grafana & Prometheus Observability (`grafana/`)
+- **Zero-Manual-Setup Provisioning**:
+  - `grafana/provisioning/datasources/prometheus.yml`: Automatically registers internal Prometheus (`http://prometheus:9090`) as the default datasource.
+  - `grafana/provisioning/dashboards/dashboard.yml`: Automatically mounts and loads dashboard JSON definitions.
+- **Pre-Built Dashboard (`grafana/dashboards/ai-gateway-dashboard.json`)**:
+  - **Title**: "Enterprise AI Gateway Observability" (UID: `ai-gateway-overview`).
+  - **Panel 1 - Total Requests & Guardrail Blocks**: Time-series breakdown of HTTP status codes (`http_requests_total{handler="/chat"}`) distinguishing between approved 200 requests and blocked 4xx/security violations.
+  - **Panel 2 - Average Request Latency**: Live latency calculation in seconds using rate quotients (`rate(http_request_duration_seconds_sum) / rate(...)`).
+
+### 3. Multi-Model Routing, Failover & Redis Caching (`litellm_config.yaml`)
 - **Centralized Proxy on Port `4000`**: Exposes OpenAI-compatible endpoints to LangGraph.
 - **Model Fallback Chain**:
   - **Primary**: `enterprise-chat` $\rightarrow$ `groq/qwen/qwen3.8-27b` via Groq LPU.
@@ -62,7 +75,7 @@ flowchart TD
   - Stores completions with a 1-hour TTL (`ttl: 3600`).
   - Delivers sub-10ms response times for repeated queries and eliminates duplicate upstream token charges.
 
-### 3. Multi-Layer Security Guardrails (`app/guardrails.py`)
+### 4. Multi-Layer Security Guardrails (`app/guardrails.py`)
 - **Prompt Injection Defense**:
   - Scans for jailbreak signatures and system prompt override attempts:
     - `ignore (all )?previous instructions`
@@ -77,14 +90,13 @@ flowchart TD
     - **Indian Phone Numbers**: Standard $+91$ and 10-digit formats $\rightarrow$ `[REDACTED_PHONE]`
   - Emits triggered audit tags in `security_flags`.
 
-### 4. State-Driven Agent Pipeline (`app/graph.py`)
+### 5. State-Driven Agent Pipeline (`app/graph.py`)
 - Built on **LangGraph** `StateGraph` for predictable, deterministic execution.
 - Dynamic environment configuration: reads `LITELLM_BASE_URL` (seamlessly switching between `http://localhost:4000/v1` and Docker's `http://litellm:4000/v1`).
 - Conditional routing terminates blocked requests immediately at `END`.
 
-### 5. Observability, Automated Tests & CI/CD
-- **Prometheus Metrics**: Exposes HTTP duration, throughput, and error histograms at `/metrics`.
-- **Automated Pytest Suite (`tests/test_gateway.py`)**: Unit tests for deterministic PII redaction and API integration tests for prompt injection blocks.
+### 6. Automated Testing & Continuous Integration (CI/CD)
+- **Pytest Suite (`tests/test_gateway.py`)**: Unit tests for deterministic PII redaction and API integration tests for prompt injection blocks.
 - **GitHub Actions (`.github/workflows/ci.yml`)**: Continuous integration on push/PR to `main` with `astral-sh/setup-uv@v4`.
 
 ---
@@ -101,6 +113,14 @@ enterprise-ai-gateway/
 │   ├── graph.py              # LangGraph workflow, state definition & conditional routing
 │   ├── guardrails.py         # Regex engines for PII redaction & prompt injection defense
 │   └── main.py               # FastAPI application, routes, and Prometheus instrumentation
+├── grafana/
+│   ├── dashboards/
+│   │   └── ai-gateway-dashboard.json   # Pre-configured Grafana telemetry dashboard
+│   └── provisioning/
+│       ├── dashboards/
+│       │   └── dashboard.yml           # Auto-dashboard provisioning config
+│       └── datasources/
+│           └── prometheus.yml          # Auto-datasource provisioning config
 ├── tests/
 │   ├── __init__.py           # Test package marker
 │   └── test_gateway.py       # PII, prompt injection, and gateway test suite
@@ -111,9 +131,11 @@ enterprise-ai-gateway/
 ├── .env.example              # Template for environment configuration
 ├── .gitignore                # Git ignore configuration
 ├── CHANGELOG.md              # Project version history and change logs
-├── docker-compose.yml        # Docker Compose configuration (Redis, LiteLLM, Gateway)
+├── docker-compose.yml        # Docker Compose configuration (5 container services)
 ├── Dockerfile                # Multi-stage Python 3.14 Docker build file
 ├── litellm_config.yaml       # LiteLLM router, fallback & Redis cache configuration
+├── prometheus.yml            # Prometheus scrape configuration
+├── grafana-dashboard.png     # Live Grafana telemetry dashboard preview image
 ├── pyproject.toml            # Project configuration, dependencies & pytest settings
 ├── requirements.txt          # Python dependencies for pip installation
 └── README.md                 # Project documentation
@@ -150,10 +172,10 @@ LITELLM_MASTER_KEY="sk-enterprise-gateway-master-key"
 
 ## Running with Docker Compose (Recommended)
 
-Start the full microservices stack (Redis + LiteLLM Router + AI Gateway):
+Start the full 5-service ecosystem (Redis + LiteLLM Router + AI Gateway + Prometheus + Grafana):
 
 ```bash
-# Build and launch all containers in detached mode
+# Build and launch all 5 containers in detached mode
 docker compose up --build -d
 ```
 
@@ -179,6 +201,38 @@ docker compose down
 
 ---
 
+## Service Endpoints & Port Map
+
+| Service | Port | URL | Description |
+|---|---|---|---|
+| **AI Gateway API** | `8000` | `http://localhost:8000` | FastAPI core gateway endpoint (`/chat`) |
+| **Interactive Swagger Docs** | `8000` | `http://localhost:8000/docs` | Swagger UI for interactive testing |
+| **ReDoc Specification** | `8000` | `http://localhost:8000/redoc` | OpenAPI documentation |
+| **Raw Gateway Telemetry** | `8000` | `http://localhost:8000/metrics` | Prometheus metrics scrape endpoint |
+| **Grafana Dashboard** | `3000` | `http://localhost:3000` | Visual dashboard (Login: `admin` / `admin`) |
+| **Prometheus Web UI** | `9090` | `http://localhost:9090` | Prometheus metric explorer & target health |
+| **LiteLLM Proxy Router** | `4000` | `http://localhost:4000` | Multi-model proxy root |
+| **LiteLLM Health** | `4000` | `http://localhost:4000/health` | Proxy health & provider connectivity |
+| **Redis Distributed Cache** | `6379` | `localhost:6379` | In-memory distributed completion cache |
+
+---
+
+## Monitoring & Dashboards (Grafana + Prometheus)
+
+The stack automatically boots with a fully configured observability pipeline:
+
+![Enterprise AI Gateway Grafana Dashboard](grafana-dashboard.png)
+
+1. **Open Grafana**: Navigate to `http://localhost:3000` in your browser.
+2. **Sign In**: Default username `admin`, password `admin`.
+3. **View Dashboard**: Open the **"Enterprise AI Gateway Observability"** dashboard.
+4. **Live Visualizations**:
+   - **Total Requests & Guardrail Blocks**: Tracks total queries to `/chat` and visualizes security rejections in real time.
+   - **Average Request Latency**: Monitors response time trends across upstream model calls and cache hits.
+5. **Verify Prometheus Targets**: Open `http://localhost:9090/targets` to verify that `ai-gateway-app:8000` is active and healthy.
+
+---
+
 ## Running Locally (Standalone / Without Docker)
 
 If you prefer to run services individually without Docker:
@@ -201,20 +255,6 @@ litellm --config litellm_config.yaml --port 4000
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-
----
-
-## Service Endpoints
-
-| Service / Tool | URL | Description |
-|---|---|---|
-| **AI Gateway Base** | `http://localhost:8000` | Gateway application root |
-| **Interactive API Docs** | `http://localhost:8000/docs` | Swagger UI for testing endpoints |
-| **ReDoc Specification** | `http://localhost:8000/redoc` | OpenAPI documentation |
-| **Prometheus Telemetry** | `http://localhost:8000/metrics` | Scrape target for Prometheus / Grafana |
-| **LiteLLM Proxy Router** | `http://localhost:4000` | Multi-model proxy root |
-| **LiteLLM Health** | `http://localhost:4000/health` | Proxy health & provider connectivity |
-| **Redis Cache** | `localhost:6379` | In-memory distributed completion cache |
 
 ---
 
