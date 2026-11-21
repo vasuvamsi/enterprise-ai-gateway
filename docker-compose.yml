@@ -10,7 +10,7 @@ services:
       retries: 5
 
   litellm:
-    image: ghcr.io/berriai/litellm:main-stable
+    build: .
     ports:
       - "4000:4000"
     volumes:
@@ -20,7 +20,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    command: ["python", "-c", "from litellm.proxy.proxy_cli import run_server; run_server()", "--config", "/app/config.yaml", "--port", "4000"]
     depends_on:
       redis:
         condition: service_healthy

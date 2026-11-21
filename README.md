@@ -1,6 +1,6 @@
 # Enterprise AI Gateway
 
-A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, **LiteLLM Proxy Router**, and **Redis Distributed Caching**. Fully containerized with **Docker & Docker Compose**, featuring automated **Pytest** test suites, **GitHub Actions CI/CD**, and **Prometheus Observability**.
+A secure, production-grade AI Gateway and middleware layer built with **FastAPI**, **LangGraph**, **LiteLLM Proxy Router**, and **Redis Distributed Caching**. Fully containerized with a unified **Python 3.14** multi-stage **Docker & Docker Compose** stack, featuring automated **Pytest** test suites, **GitHub Actions CI/CD**, and **Prometheus Observability**.
 
 The Gateway acts as an enterprise control plane positioned between your client applications and upstream Large Language Models (LLMs). It enforces **real-time security guardrails**, **automated PII redaction**, **prompt injection defense**, **multi-model failover** (**Groq Qwen 3.8 27B** $\rightarrow$ **Google Gemini 2.5 Flash**), and **Redis response caching**.
 
@@ -23,7 +23,7 @@ flowchart TD
         LLMNode --> EndNode
     end
 
-    subgraph DockerCompose ["Docker Compose Stack"]
+    subgraph DockerCompose ["Docker Compose Stack (Unified Python 3.14 Images)"]
         Gateway -->|http://litellm:4000/v1| LiteLLM["litellm (LiteLLM Proxy Container :4000)"]
         LiteLLM -->|Cache Check & Store| Redis[("redis:7-alpine (:6379)<br/>TTL: 3600s")]
     end
@@ -42,13 +42,15 @@ flowchart TD
 
 ## Features Implemented
 
-### 1. Multi-Container Docker Stack (`docker-compose.yml` & `Dockerfile`)
+### 1. Unified Multi-Container Docker Stack (`docker-compose.yml` & `Dockerfile`)
 - **One-Command Orchestration**: Boots the entire enterprise gateway microservices architecture via `docker compose up --build -d`.
-- **Three Orchestrated Services**:
-  - `redis`: Redis 7 Alpine image with native container health checks (`redis-cli ping`).
-  - `litellm`: Multi-model routing proxy attached to Redis for distributed caching.
-  - `ai-gateway-app`: FastAPI + LangGraph gateway built using an optimized multi-stage `Dockerfile` with UV binary caching.
-- **Service Dependency & Health Guarantees**: `litellm` starts only after Redis passes health checks; `ai-gateway-app` depends directly on `litellm`.
+- **Unified Python 3.14 Base**:
+  - The multi-stage `Dockerfile` uses `python:3.14-slim` across both builder and runtime stages, guaranteeing complete runtime parity with project configurations (`.python-version` and `pyproject.toml`).
+  - Installs `uv` and executes locked sync targeting Python 3.14: `uv sync --python 3.14 --locked --no-install-project --no-dev`.
+- **Shared Unified Image Architecture**:
+  - Both `ai-gateway-app` and `litellm` build from the **single local Dockerfile** (`build: .`), eliminating the need to pull external third-party images.
+  - The `litellm` container runs via the local Python CLI entry point (`python -c "from litellm.proxy.proxy_cli import run_server; run_server()"`).
+- **Service Dependency & Health Guarantees**: `litellm` starts only after `redis:7-alpine` passes health checks (`redis-cli ping`); `ai-gateway-app` depends directly on `litellm`.
 
 ### 2. Multi-Model Routing, Failover & Redis Caching (`litellm_config.yaml`)
 - **Centralized Proxy on Port `4000`**: Exposes OpenAI-compatible endpoints to LangGraph.
@@ -110,7 +112,7 @@ enterprise-ai-gateway/
 ├── .gitignore                # Git ignore configuration
 ├── CHANGELOG.md              # Project version history and change logs
 ├── docker-compose.yml        # Docker Compose configuration (Redis, LiteLLM, Gateway)
-├── Dockerfile                # Multi-stage Docker build file for Gateway
+├── Dockerfile                # Multi-stage Python 3.14 Docker build file
 ├── litellm_config.yaml       # LiteLLM router, fallback & Redis cache configuration
 ├── pyproject.toml            # Project configuration, dependencies & pytest settings
 ├── requirements.txt          # Python dependencies for pip installation
@@ -123,7 +125,7 @@ enterprise-ai-gateway/
 
 ### Prerequisites
 - **Docker & Docker Compose** (for containerized deployment)
-- **Python**: Version `3.10+` (if running locally without Docker)
+- **Python**: Version `3.14` (or `3.10+` if running locally without Docker)
 - **API Keys**:
   - [Groq API Key](https://console.groq.com/) (Primary model)
   - [Google Gemini API Key](https://aistudio.google.com/) (Fallback model)
@@ -148,7 +150,7 @@ LITELLM_MASTER_KEY="sk-enterprise-gateway-master-key"
 
 ## Running with Docker Compose (Recommended)
 
-Start the full microservices stack (Redis + LiteLLM + AI Gateway):
+Start the full microservices stack (Redis + LiteLLM Router + AI Gateway):
 
 ```bash
 # Build and launch all containers in detached mode

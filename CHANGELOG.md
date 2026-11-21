@@ -5,18 +5,31 @@ All notable changes to the **Enterprise AI Gateway** project will be documented 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-11-21
+
+### Changed
+- **Unified Python 3.14 Docker Environment (`Dockerfile`)**:
+  - Upgraded both the builder and final runtime stages from `python:3.12-slim` to `python:3.14-slim`, ensuring 100% version alignment with `.python-version` and `pyproject.toml` (`>=3.14`).
+  - Builder stage installs `uv` directly using `pip install --no-cache-dir uv` and targets Python 3.14 explicitly with `uv sync --python 3.14 --locked --no-install-project --no-dev`.
+- **Shared Unified Image for LiteLLM Service (`docker-compose.yml`)**:
+  - Replaced third-party `image: ghcr.io/berriai/litellm:main-stable` with the project's own unified local build (`build: .`).
+  - Updated LiteLLM container command to run via the local Python package entry point: `["python", "-c", "from litellm.proxy.proxy_cli import run_server; run_server()", "--config", "/app/config.yaml", "--port", "4000"]`.
+  - Reuses a single cached multi-stage Docker build across both gateway microservices, saving disk space and eliminating external registry pull delays.
+
+---
+
 ## [0.4.0] - 2026-11-21
 
 ### Added
 - **Multi-Container Docker Orchestration (`docker-compose.yml`)**:
   - Full microservices stack with three containerized services:
     1. `redis` (`redis:7-alpine`): Distributed caching backend with automated health check probe (`redis-cli ping`).
-    2. `litellm` (`ghcr.io/berriai/litellm:main-stable`): High-availability AI routing proxy on port `4000`, connected to Redis for shared response caching.
+    2. `litellm`: High-availability AI routing proxy on port `4000`, connected to Redis for shared response caching.
     3. `ai-gateway-app`: Gateway application container built from local `Dockerfile`, exposing port `8000`.
   - Configured service health check dependencies: LiteLLM waits for healthy Redis; AI Gateway waits for LiteLLM.
 - **Production Multi-Stage Dockerfile (`Dockerfile`)**:
-  - Optimized multi-stage build using `python:3.12-slim` base image.
-  - UV binary extraction via `ghcr.io/astral-sh/uv:latest` for fast locked dependency resolution (`uv sync --locked --no-install-project --no-dev`).
+  - Optimized multi-stage build.
+  - UV binary extraction for fast locked dependency resolution (`uv sync --locked --no-install-project --no-dev`).
   - Lean final runtime stage containing only the virtual environment and application code.
 - **Distributed Redis Response Caching (`litellm_config.yaml`)**:
   - Migrated from in-process local memory cache to distributed Redis cache with configurable TTL (`ttl: 3600`).
